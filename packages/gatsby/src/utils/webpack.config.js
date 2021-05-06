@@ -18,8 +18,10 @@ import { createWebpackUtils } from "./webpack-utils"
 import { hasLocalEslint } from "./local-eslint-config-finder"
 import { getAbsolutePathForVirtualModule } from "./gatsby-webpack-virtual-modules"
 import { StaticQueryMapper } from "./webpack/static-query-mapper"
+import { ForceCssHMRForEdgeCases } from "./webpack/force-css-hmr-for-edge-cases"
 import { getBrowsersList } from "./browserslist"
 import { builtinModules } from "module"
+const { BabelConfigItemsCacheInvalidatorPlugin } = require(`./babel-loader`)
 
 const FRAMEWORK_BUNDLES = [`react`, `react-dom`, `scheduler`, `prop-types`]
 
@@ -210,13 +212,15 @@ module.exports = async (
       }),
 
       plugins.virtualModules(),
+      new BabelConfigItemsCacheInvalidatorPlugin(),
     ]
 
     switch (stage) {
       case `develop`: {
         configPlugins = configPlugins
           .concat([
-            plugins.fastRefresh(),
+            plugins.fastRefresh({ modulesThatUseGatsby }),
+            new ForceCssHMRForEdgeCases(),
             plugins.hotModuleReplacement(),
             plugins.noEmitOnErrors(),
             plugins.eslintGraphqlSchemaReload(),
@@ -341,7 +345,7 @@ module.exports = async (
       // Gatsby main router changes it, to keep v2 behaviour.
       // We will need to most likely remove this for v3.
       {
-        test: require.resolve(`@reach/router/es/index`),
+        test: require.resolve(`@gatsbyjs/reach-router/es/index`),
         type: `javascript/auto`,
         use: [{
           loader: require.resolve(`./reach-router-add-basecontext-export-loader`),
@@ -424,6 +428,7 @@ module.exports = async (
         // relative path imports are used sometimes
         // See https://stackoverflow.com/a/49455609/6420957 for more details
         "@babel/runtime": getPackageRoot(`@babel/runtime`),
+        "@reach/router": getPackageRoot(`@gatsbyjs/reach-router`),
         "react-lifecycles-compat": directoryPath(
           `.cache/react-lifecycles-compat.js`
         ),
@@ -435,11 +440,6 @@ module.exports = async (
           `@gatsbyjs/webpack-hot-middleware`
         ),
         $virtual: getAbsolutePathForVirtualModule(`$virtual`),
-
-        // SSR can have many react versions as some packages use their own version. React works best with 1 version.
-        // By resolving react,react-dom from gatsby we'll get the site versions of react & react-dom because it's specified as a peerdependency.
-        react: getPackageRoot(`react`),
-        "react-dom": getPackageRoot(`react-dom`),
       },
       plugins: [new CoreJSResolver()],
     }
@@ -448,7 +448,7 @@ module.exports = async (
       stage === `build-html` || stage === `develop-html` ? `node` : `web`
     if (target === `web`) {
       resolve.alias[`@reach/router`] = path.join(
-        path.dirname(require.resolve(`@reach/router/package.json`)),
+        getPackageRoot(`@gatsbyjs/reach-router`),
         `es`
       )
     }
@@ -457,6 +457,15 @@ module.exports = async (
       resolve.alias[`react-dom$`] = `react-dom/profiling`
       resolve.alias[`scheduler/tracing`] = `scheduler/tracing-profiling`
     }
+
+    // SSR can have many react versions as some packages use their own version. React works best with 1 version.
+    // By resolving react,react-dom from gatsby we'll get the site versions of react & react-dom because it's specified as a peerdependency.
+    //
+    // we need to put this below our resolve.alias for profiling as webpack picks the first one that matches
+    // @see https://github.com/gatsbyjs/gatsby/issues/31098
+    resolve.alias[`react`] = getPackageRoot(`react`)
+    resolve.alias[`react-dom`] = getPackageRoot(`react-dom`)
+
     return resolve
   }
 
@@ -503,9 +512,7 @@ module.exports = async (
     const [major, minor] = process.version.replace(`v`, ``).split(`.`)
     config.target = `node12.13`
   } else {
-    config.target = `browserslist:${getBrowsersList(program.directory).join(
-      `,`
-    )}`
+    config.target = [`web`, `es5`]
   }
 
   const isCssModule = module => module.type === `css/mini-extract`
@@ -758,6 +765,37 @@ module.exports = async (
     config.externals = {
       "socket.io-client": `io`,
     }
+  }
+
+  if (
+    process.env.GATSBY_EXPERIMENTAL_PRESERVE_WEBPACK_CACHE &&
+    (stage === `build-javascript` || stage === `build-html`)
+  ) {
+    const cacheLocation = path.join(
+      program.directory,
+      `.cache`,
+      `webpack`,
+      `stage-` + stage
+    )
+
+    const cacheConfig = {
+      type: `filesystem`,
+      name: stage,
+      cacheLocation,
+      buildDependencies: {
+        config: [
+          __filename,
+          ...store
+            .getState()
+            .flattenedPlugins.filter(plugin =>
+              plugin.nodeAPIs.includes(`onCreateWebpackConfig`)
+            )
+            .map(plugin => path.join(plugin.resolve, `gatsby-node.js`)),
+        ],
+      },
+    }
+
+    config.cache = cacheConfig
   }
 
   store.dispatch(actions.replaceWebpackConfig(config))

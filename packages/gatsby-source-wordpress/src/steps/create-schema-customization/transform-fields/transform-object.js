@@ -54,7 +54,7 @@ export const buildGatsbyNodeObjectResolver = ({ field, fieldName }) => async (
     schema: { typePrefix: prefix },
   } = getPluginOptions()
 
-  if (!existingNode.__typename.startsWith(prefix)) {
+  if (existingNode?.__typename && !existingNode.__typename.startsWith(prefix)) {
     existingNode.__typename = buildTypeName(existingNode.__typename)
   }
 
@@ -63,6 +63,12 @@ export const buildGatsbyNodeObjectResolver = ({ field, fieldName }) => async (
   }
 
   const queryInfo = getQueryInfoByTypeName(field.type.name)
+
+  if (!queryInfo) {
+    // if we don't have query info for a type
+    // it probably means this type is excluded in plugin options
+    return null
+  }
 
   const isLazyMediaItem =
     queryInfo.typeInfo.nodesTypeName === `MediaItem` &&

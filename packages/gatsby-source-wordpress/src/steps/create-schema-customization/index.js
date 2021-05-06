@@ -5,6 +5,8 @@ import { fieldOfTypeWasFetched } from "./helpers"
 import buildType from "./build-types"
 import { getGatsbyNodeTypeNames } from "../source-nodes/fetch-nodes/fetch-nodes"
 import { typeIsExcluded } from "~/steps/ingest-remote-schema/is-excluded"
+import { formatLogMessage } from "../../utils/format-log-message"
+import { CODES } from "../../utils/report"
 
 /**
  * createSchemaCustomization
@@ -42,18 +44,20 @@ const customizeSchema = async ({ actions, schema }) => {
       fieldOfTypeWasFetched(type) &&
       !typeIsExcluded({ pluginOptions, typeName: type.name })
     ) {
+      let builtType
+
       switch (type.kind) {
         case `UNION`:
-          buildType.unionType({ ...typeBuilderApi, type })
+          builtType = buildType.unionType({ ...typeBuilderApi, type })
           break
         case `INTERFACE`:
-          buildType.interfaceType({ ...typeBuilderApi, type })
+          builtType = buildType.interfaceType({ ...typeBuilderApi, type })
           break
         case `OBJECT`:
-          buildType.objectType({ ...typeBuilderApi, type })
+          builtType = buildType.objectType({ ...typeBuilderApi, type })
           break
         case `ENUM`:
-          buildType.enumType({ ...typeBuilderApi, type })
+          builtType = buildType.enumType({ ...typeBuilderApi, type })
           break
         case `SCALAR`:
           /**
@@ -62,6 +66,10 @@ const customizeSchema = async ({ actions, schema }) => {
            */
           break
       }
+
+      if (builtType) {
+        typeDefs.push(builtType)
+      }
     }
   })
 
@@ -69,7 +77,7 @@ const customizeSchema = async ({ actions, schema }) => {
   // where the typename is the type prefix
   // The node fields are the non-node root fields of the remote schema
   // like so: query { prefix { ...fields } }
-  buildType.objectType({
+  const wpType = buildType.objectType({
     ...typeBuilderApi,
     type: {
       kind: `OBJECT`,
@@ -81,6 +89,8 @@ const customizeSchema = async ({ actions, schema }) => {
     isAGatsbyNode: true,
   })
 
+  typeDefs.push(wpType)
+
   actions.createTypes(typeDefs)
 }
 
@@ -88,7 +98,13 @@ const createSchemaCustomization = async api => {
   try {
     await customizeSchema(api)
   } catch (e) {
-    api.reporter.panic(e)
+    api.reporter.panic({
+      id: CODES.SourcePluginCodeError,
+      error: e,
+      context: {
+        sourceMessage: formatLogMessage(e.message),
+      },
+    })
   }
 }
 

@@ -15,10 +15,6 @@ const {
   GraphQLList,
 } = require(`gatsby/graphql`)
 const qs = require(`qs`)
-const { generateImageData } = require(`gatsby-plugin-image`)
-const {
-  getGatsbyImageFieldConfig,
-} = require(`gatsby-plugin-image/graphql-utils`)
 const { stripIndent } = require(`common-tags`)
 
 const cacheImage = require(`./cache-image`)
@@ -27,6 +23,8 @@ const {
   ImageFormatType,
   ImageResizingBehavior,
   ImageCropFocusType,
+  ImageLayoutType,
+  ImagePlaceholderType,
 } = require(`./schemes`)
 
 // By default store the images in `.cache` but allow the user to override
@@ -317,7 +315,8 @@ const resolveFixed = (image, options) => {
     })
     .join(`,\n`)
 
-  let pickedHeight, pickedWidth
+  let pickedHeight
+  let pickedWidth
   if (options.height) {
     pickedHeight = options.height
     pickedWidth = options.height * desiredAspectRatio
@@ -449,8 +448,8 @@ const resolveResize = (image, options) => {
     }
   }
 
-  let pickedHeight = options.height,
-    pickedWidth = options.width
+  let pickedHeight = options.height
+  let pickedWidth = options.width
 
   if (pickedWidth === undefined) {
     pickedWidth = pickedHeight * aspectRatio
@@ -663,9 +662,7 @@ const fluidNodeType = ({ name, getTracedSVG }) => {
   }
 }
 
-let warnedForBeta = false
-
-exports.extendNodeType = ({ type, store, reporter }) => {
+exports.extendNodeType = ({ type, store }) => {
   if (type.name !== `ContentfulAsset`) {
     return {}
   }
@@ -721,12 +718,20 @@ exports.extendNodeType = ({ type, store, reporter }) => {
   const resolveGatsbyImageData = async (image, options) => {
     if (!isImage(image)) return null
 
-    const { baseUrl, ...sourceMetadata } = getBasicImageProps(image, options)
+    const { generateImageData } = require(`gatsby-plugin-image`)
 
+    const { baseUrl, contentType, width, height } = getBasicImageProps(
+      image,
+      options
+    )
+    let [, format] = contentType.split(`/`)
+    if (format === `jpeg`) {
+      format = `jpg`
+    }
     const imageProps = generateImageData({
       ...options,
       pluginName: `gatsby-source-contentful`,
-      sourceMetadata,
+      sourceMetadata: { width, height, format },
       filename: baseUrl,
       generateImageSource,
       fit: fitMap.get(options.resizingBehavior),
@@ -768,13 +773,9 @@ exports.extendNodeType = ({ type, store, reporter }) => {
 
   // gatsby-plugin-image
   const getGatsbyImageData = () => {
-    if (!warnedForBeta) {
-      reporter.warn(
-        stripIndent`
-      Thank you for trying the beta version of the \`gatsbyImageData\` API. Please provide feedback and report any issues at: https://github.com/gatsbyjs/gatsby/discussions/27950`
-      )
-      warnedForBeta = true
-    }
+    const {
+      getGatsbyImageFieldConfig,
+    } = require(`gatsby-plugin-image/graphql-utils`)
 
     const fieldConfig = getGatsbyImageFieldConfig(resolveGatsbyImageData, {
       jpegProgressive: {
@@ -791,19 +792,41 @@ exports.extendNodeType = ({ type, store, reporter }) => {
         type: GraphQLInt,
         defaultValue: 50,
       },
+      layout: {
+        type: ImageLayoutType,
+        description: stripIndent`
+            The layout for the image.
+            CONSTRAINED: Resizes to fit its container, up to a maximum width, at which point it will remain fixed in size. 
+            FIXED: A static image size, that does not resize according to the screen width
+            FULL_WIDTH: The image resizes to fit its container, even if that is larger than the source image.
+            Pass a value to "sizes" if the container is not the full width of the screen.
+        `,
+      },
+      placeholder: {
+        type: ImagePlaceholderType,
+        description: stripIndent`
+            Format of generated placeholder image, displayed while the main image loads.
+            BLURRED: a blurred, low resolution image, encoded as a base64 data URI (default)
+            DOMINANT_COLOR: a solid color, calculated from the dominant color of the image.
+            TRACED_SVG: a low-resolution traced SVG of the image.
+            NONE: no placeholder. Set the argument "backgroundColor" to use a fixed background color.`,
+      },
       formats: {
         type: GraphQLList(ImageFormatType),
         description: stripIndent`
             The image formats to generate. Valid values are AUTO (meaning the same format as the source image), JPG, PNG, and WEBP.
             The default value is [AUTO, WEBP], and you should rarely need to change this. Take care if you specify JPG or PNG when you do
             not know the formats of the source images, as this could lead to unwanted results such as converting JPEGs to PNGs. Specifying
-            both PNG and JPG is not supported and will be ignored. 
+            both PNG and JPG is not supported and will be ignored.
         `,
         defaultValue: [``, `webp`],
       },
     })
 
     fieldConfig.type = GraphQLJSON
+
+    fieldConfig.args.placeholder.defaultValue = `dominantColor`
+    fieldConfig.args.layout.defaultValue = `constrained`
 
     return fieldConfig
   }

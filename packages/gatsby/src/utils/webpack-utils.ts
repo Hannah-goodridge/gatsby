@@ -1,7 +1,6 @@
 import * as path from "path"
 import { Loader, RuleSetRule, Plugin } from "webpack"
 import { GraphQLSchema } from "graphql"
-import postcss from "postcss"
 import autoprefixer from "autoprefixer"
 import flexbugs from "postcss-flexbugs-fixes"
 import TerserPlugin from "terser-webpack-plugin"
@@ -10,7 +9,7 @@ import CssMinimizerPlugin from "css-minimizer-webpack-plugin"
 import ReactRefreshWebpackPlugin from "@pmmmwh/react-refresh-webpack-plugin"
 import { getBrowsersList } from "./browserslist"
 import ESLintPlugin from "eslint-webpack-plugin"
-
+import { cpuCoreCount } from "gatsby-core-utils"
 import { GatsbyWebpackStatsExtractor } from "./gatsby-webpack-stats-extractor"
 import { GatsbyWebpackEslintGraphqlSchemaReload } from "./gatsby-webpack-eslint-graphql-schema-reload-plugin"
 import {
@@ -585,10 +584,10 @@ export const createWebpackUtils = (
     const css: IRuleUtils["css"] = (options = {}): RuleSetRule => {
       const { browsers, ...restOptions } = options
       const use = [
-        loaders.miniCssExtract(restOptions),
+        !isSSR && loaders.miniCssExtract(restOptions),
         loaders.css({ ...restOptions, importLoaders: 1 }),
         loaders.postcss({ browsers }),
-      ]
+      ].filter(Boolean)
 
       return {
         use,
@@ -661,6 +660,7 @@ export const createWebpackUtils = (
         },
         ...terserOptions,
       },
+      parallel: Math.max(1, cpuCoreCount() - 1),
       ...options,
     })
 
@@ -729,15 +729,38 @@ export const createWebpackUtils = (
         ],
       },
     }
-  ): CssMinimizerPlugin => new CssMinimizerPlugin(options)
+  ): CssMinimizerPlugin =>
+    new CssMinimizerPlugin({
+      parallel: Math.max(1, cpuCoreCount() - 1),
+      ...options,
+    })
 
-  plugins.fastRefresh = (): Plugin =>
-    new ReactRefreshWebpackPlugin({
+  plugins.fastRefresh = ({ modulesThatUseGatsby }): Plugin => {
+    const regExpToHack = /node_modules/
+    regExpToHack.test = (modulePath: string): boolean => {
+      // when it's not coming from node_modules we treat it as a source file.
+      if (!vendorRegex.test(modulePath)) {
+        return false
+      }
+
+      // If the module uses Gatsby as a dependency
+      // we want to treat it as src because of shadowing
+      return !modulesThatUseGatsby.some(module =>
+        modulePath.includes(module.path)
+      )
+    }
+
+    return new ReactRefreshWebpackPlugin({
       overlay: {
         sockIntegration: `whm`,
         module: path.join(__dirname, `fast-refresh-module`),
       },
+      // this is a bit hacky - exclude expect string or regexp or array of those
+      // so this is tricking ReactRefreshWebpackPlugin with providing regexp with
+      // overwritten .test method
+      exclude: regExpToHack,
     })
+  }
 
   plugins.extractText = (options: any): Plugin =>
     new MiniCssExtractPlugin({
@@ -765,7 +788,7 @@ export const createWebpackUtils = (
       ],
       ...eslintConfig(schema, jsxRuntimeExists),
     }
-    //@ts-ignore
+    // @ts-ignore
     return new ESLintPlugin(options)
   }
 
@@ -779,7 +802,7 @@ export const createWebpackUtils = (
       ],
       ...eslintRequiredConfig,
     }
-    //@ts-ignore
+    // @ts-ignore
     return new ESLintPlugin(options)
   }
 

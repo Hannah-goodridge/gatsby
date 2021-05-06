@@ -1,6 +1,6 @@
 import * as React from "react"
 import { ErrorBoundary } from "./components/error-boundary"
-import { ShadowPortal } from "./components/portal"
+import { ShadowPortal } from "../shadow-portal"
 import { Style } from "./style"
 import { BuildError } from "./components/build-error"
 import { RuntimeErrors } from "./components/runtime-errors"
@@ -54,7 +54,7 @@ function DevOverlay({ children }) {
   const [state, dispatch] = React.useReducer(reducer, initialState)
 
   React.useEffect(() => {
-    const gatsbyEvents = window._gatsbyEvents
+    const gatsbyEvents = window._gatsbyEvents || []
     window._gatsbyEvents = {
       push: ([channel, event]) => {
         if (channel === `FAST_REFRESH`) {
@@ -102,7 +102,7 @@ function DevOverlay({ children }) {
     <React.Fragment>
       <ErrorBoundary hasErrors={hasErrors}>{children ?? null}</ErrorBoundary>
       {hasErrors ? (
-        <ShadowPortal>
+        <ShadowPortal identifier="gatsby-fast-refresh">
           <Style />
           <ErrorComponent />
         </ShadowPortal>
